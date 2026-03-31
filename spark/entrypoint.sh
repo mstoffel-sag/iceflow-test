@@ -8,11 +8,11 @@ SPARK_HOME=${SPARK_HOME:-/opt/spark}
 # requires auth even on the /v1/config discovery endpoint.
 echo "Fetching OAuth2 token..."
 TOKEN=$(curl -sf -X POST \
-  "https://keycloak.monitor.c8y.io/realms/IceFlow/protocol/openid-connect/token" \
+  "${ICEFLOW_OAUTH2_SERVER_URI}" \
   -d "grant_type=client_credentials" \
   -d "client_id=${ICEFLOW_CLIENT_ID}" \
   -d "client_secret=${ICEFLOW_CLIENT_SECRET}" \
-  -d "scope=iceberg-api-eu-latest" \
+  -d "scope=${ICEFLOW_NESSIE_SCOPE}" \
   | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
 
 if [ -z "$TOKEN" ]; then
@@ -27,6 +27,12 @@ sed \
   -e "s|\${ICEFLOW_OAUTH2_TOKEN}|${TOKEN}|g" \
   -e "s|\${ICEFLOW_CLIENT_ID}|${ICEFLOW_CLIENT_ID}|g" \
   -e "s|\${ICEFLOW_CLIENT_SECRET}|${ICEFLOW_CLIENT_SECRET}|g" \
+  -e "s|\${ICEFLOW_NESSIE_URI}|${ICEFLOW_NESSIE_URI}|g" \
+  -e "s|\${ICEFLOW_NESSIE_WAREHOUSE}|${ICEFLOW_NESSIE_WAREHOUSE}|g" \
+  -e "s|\${ICEFLOW_NESSIE_PREFIX}|${ICEFLOW_NESSIE_PREFIX}|g" \
+  -e "s|\${ICEFLOW_NESSIE_SCOPE}|${ICEFLOW_NESSIE_SCOPE}|g" \
+  -e "s|\${ICEFLOW_OAUTH2_SERVER_URI}|${ICEFLOW_OAUTH2_SERVER_URI}|g" \
+  -e "s|\${ICEFLOW_S3_ENDPOINT}|${ICEFLOW_S3_ENDPOINT}|g" \
   /spark-conf/spark-defaults.conf > "$SPARK_HOME/conf/spark-defaults.conf"
 
 rm -f /tmp/spark_ready
