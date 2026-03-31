@@ -30,10 +30,22 @@ Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>
 2. Edit `.env`:
 
    ```
+   # OAuth2 credentials
    ICEFLOW_CLIENT_ID=<your OAuth2 client ID>
    ICEFLOW_CLIENT_SECRET=<your OAuth2 client secret>
+
+   # Nessie / Iceberg catalog
+   ICEFLOW_NESSIE_URI=<Nessie REST endpoint>
+   ICEFLOW_NESSIE_WAREHOUSE=<warehouse location>
+   ICEFLOW_NESSIE_PREFIX=main
+   ICEFLOW_NESSIE_SCOPE=<OAuth2 scope>
+   ICEFLOW_OAUTH2_SERVER_URI=<token endpoint>
+
+   # S3 / AWS
    ICEFLOW_AWS_ACCESS_KEY=<your AWS access key>
    ICEFLOW_AWS_SECRET_KEY=<your AWS secret key>
+   ICEFLOW_AWS_REGION=<region>
+   ICEFLOW_S3_ENDPOINT=<S3-compatible endpoint>
    ```
 
 3. Start the stack:
@@ -122,6 +134,7 @@ Available at http://localhost:4040 while Spark is running.
 ├── docker-compose.yml              # Spark + Metabase services
 ├── .env                            # Credentials (gitignored)
 ├── .env.example                    # Credentials template
+├── check_table.py                  # Inspect Iceberg tables via the REST API directly
 ├── spark-conf/
 │   └── spark-defaults.conf         # Iceberg/Nessie catalog config template
 └── spark/
@@ -129,6 +142,16 @@ Available at http://localhost:4040 while Spark is running.
     ├── entrypoint.sh               # Fetches OAuth2 token, starts Thrift Server, creates views
     └── create_views.sql            # Hive view definitions (edit to add/change views)
 ```
+
+## Inspecting the catalog directly
+
+`check_table.py` queries the Iceberg REST API directly (bypassing Spark) to inspect table metadata. Useful for verifying table names, snapshot counts, and metadata locations before configuring views.
+
+```bash
+ICEFLOW_CLIENT_ID=... ICEFLOW_CLIENT_SECRET=... python check_table.py
+```
+
+It lists all tables under the `measurement`, `inventory`, and `event` namespaces and prints metadata location, current snapshot, and manifest list for each.
 
 ## Troubleshooting
 
