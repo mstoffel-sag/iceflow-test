@@ -1,16 +1,18 @@
 # iceflow-test
 
-Local stack for querying [Cumulocity IceFlow](https://cumulocity.com) Iceberg data via Trino and Metabase.
+Local stack for querying [Cumulocity IceFlow](https://cumulocity.com) Iceberg data via Spark and Metabase.
 
 ## Architecture
 
 ```
 Metabase (port 3000)
-    └── Starburst/Trino connector (HTTP, no SSL)
-            └── Trino (port 8080)
-                    └── Nessie/Iceberg REST catalog
+    └── SparkSQL connector (HiveThriftServer2, port 10000)
+            └── Spark 3.5.8 + Iceberg 1.10.1
+                    └── Nessie/Iceberg REST catalog (OAuth2)
                             └── S3 (cumulocity-trial-prod-iceflow-bucket)
 ```
+
+Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>`) which Metabase cannot browse directly. Spark exposes them as Hive views in the `default` schema so Metabase can discover and query them.
 
 ## Prerequisites
 
@@ -40,84 +42,110 @@ Metabase (port 3000)
    docker compose up -d
    ```
 
+   Spark fetches an OAuth2 token, starts HiveThriftServer2, creates the Hive views, and signals healthy. Metabase starts only after Spark is healthy and immediately syncs the views.
+
 4. Open Metabase at http://localhost:3000
 
 ## Metabase connection settings
 
-The Trino database should be configured in Metabase with:
+The SparkSQL database is configured as:
 
-| Setting   | Value             |
-| --------- | ----------------- |
-| Connector | Starburst (Trino) |
-| Host      | `trino`           |
-| Port      | `8080`            |
-| Catalog   | `nessie`          |
-| SSL       | off               |
-| Username  | `trino`           |
+| Setting  | Value     |
+| -------- | --------- |
+| Engine   | SparkSQL  |
+| Host     | `spark`   |
+| Port     | `10000`   |
+| Database | `default` |
+| Username | `spark`   |
 
-> **Tip:** In Admin → Databases → Trino → Scheduling, set "Scan for filter values" to **Never** to avoid an endless sync spinner.
+## Available views
+
+Views are defined in `spark/create_views.sql` and created in the Hive `default` schema on startup:
+
+| View name                           | Nessie source table                                          |
+| ----------------------------------- | ------------------------------------------------------------ |
+| `cdc__measurement__c8y_temperature` | `nessie.default.t2027824580.cdc.measurement.c8y_Temperature` |
+| `cdc__event__event`                 | `nessie.default.t2027824580.cdc.event.event`                 |
+| `cdc__event__c8y_position`          | `nessie.default.t2027824580.cdc.event.c8y_Position`          |
+| `cdc__event__jobstatus`             | `nessie.default.t2027824580.cdc.event.jobStatus`             |
+| `cdc__alarm__alarm`                 | `nessie.default.t2027824580.cdc.alarm.alarm`                 |
+| `cdc__inventory__inventory`         | `nessie.default.t2027824580.cdc.inventory.inventory`         |
+| `cdc__inventory__c8y_position`      | `nessie.default.t2027824580.cdc.inventory.c8y_Position`      |
+
+## Adding or editing views
+
+Edit `spark/create_views.sql` and add or modify `CREATE OR REPLACE VIEW` statements:
+
+```sql
+CREATE OR REPLACE VIEW default.my_view AS
+SELECT * FROM nessie.`default`.`t2027824580`.`cdc`.`<type>`.`<table>`;
+```
+
+Then restart Spark to recreate all views:
+
+```bash
+docker compose restart spark
+```
+
+To verify views after restart:
+
+```bash
+docker exec spark /opt/spark/bin/beeline -u "jdbc:hive2://localhost:10000" -n spark \
+  -e "SHOW TABLES IN default;"
+```
+
+Trigger a Metabase schema resync after adding views: Admin → Databases → Spark → Sync database schema now.
 
 ## Querying data
 
-Metabase's visual table browser does not support Trino's nested namespace schema naming (schemas like `default.t<tenant>.cdc.inventory`). Use **New → SQL query** instead.
-
-### Available tables
-
-| Table       | Schema                              | Rows (approx.) |
-| ----------- | ----------------------------------- | -------------- |
-| `inventory` | `default.t2027824580.cdc.inventory` | ~312k          |
-| `event`     | `default.t2027824580.cdc.event`     | ~315k          |
-| `alarm`     | `default.t2027824580.cdc.alarm`     | ~500           |
-| `operation` | `default.t2027824580.cdc.operation` | 0              |
-
-### Query syntax
-
-Schemas with dots in the name must be double-quoted:
+Use Metabase's visual query builder or SQL editor. Example:
 
 ```sql
-SELECT *
-FROM nessie."default.t2027824580.cdc.inventory".inventory
+SELECT T.value, T.unit, time, source
+FROM default.cdc__measurement__c8y_temperature
+ORDER BY time DESC
 LIMIT 100
 ```
 
-```sql
-SELECT *
-FROM nessie."default.t2027824580.cdc.event".event
-LIMIT 100
-```
+Note: `T` is a struct column — access fields with `T.value` and `T.unit`.
 
-```sql
-SELECT *
-FROM nessie."default.t2027824580.cdc.alarm".alarm
-LIMIT 100
-```
+> **Note:** The inventory table is a CDC log, not a deduplicated dimension table. Each device update creates a new row. Use a `ROW_NUMBER()` window function to get the latest state per device if joining to measurements.
+
+## Spark UI
+
+Available at http://localhost:4040 while Spark is running.
 
 ## File structure
 
 ```
 .
-├── docker-compose.yml          # Trino + Metabase services
-├── .env                        # Credentials (gitignored)
-├── .env.example                # Credentials template
-└── etc/
-    ├── config.properties       # Trino node config
-    ├── jvm.config              # Trino JVM settings
-    ├── log.properties          # Trino log levels
-    ├── node.properties         # Trino node identity
-    └── catalog/
-        └── nessie.properties   # Iceberg REST catalog config (reads from .env)
+├── docker-compose.yml              # Spark + Metabase services
+├── .env                            # Credentials (gitignored)
+├── .env.example                    # Credentials template
+├── spark-conf/
+│   └── spark-defaults.conf         # Iceberg/Nessie catalog config template
+└── spark/
+    ├── Dockerfile                  # Spark 3.5.8 image with Iceberg + S3 JARs
+    ├── entrypoint.sh               # Fetches OAuth2 token, starts Thrift Server, creates views
+    └── create_views.sql            # Hive view definitions (edit to add/change views)
 ```
 
 ## Troubleshooting
 
-**Trino exits with code 137 (OOM)**
-Increase `mem_limit` and `-Xmx` in `docker-compose.yml`. Current limits: Trino `2g` / `1500m`.
+**Spark exits with OOM / SIGSEGV**
+Increase `mem_limit` for the spark service in `docker-compose.yml` (currently `4g`).
 
 **Metabase exits with code 137 (OOM)**
-Increase `mem_limit` and `-Xmx` for the metabase service. Current limits: `4g` / `3g`.
+Increase `mem_limit` for the metabase service (currently `4g`) and `-Xmx` in `JAVA_TOOL_OPTIONS`.
 
-**`TABLE_NOT_FOUND` on SELECT**
-Only certain tables are queryable — see the table above. Some tables visible in `SHOW TABLES` have broken metadata on the remote Iceberg catalog and cannot be queried.
+**Views not appearing in Metabase**
+Check view creation log inside the container:
 
-**Metabase sync spinner never stops**
-Go to Admin → Databases → Trino → Scheduling and set "Scan for filter values" to Never.
+```bash
+docker exec spark cat /tmp/create_views.log
+```
+
+Then trigger a manual resync in Metabase: Admin → Databases → Spark → Sync database schema now.
+
+**OAuth2 token fetch fails on startup**
+Spark will exit immediately. Check `docker logs spark` for the error. Verify `ICEFLOW_CLIENT_ID` and `ICEFLOW_CLIENT_SECRET` in `.env`.

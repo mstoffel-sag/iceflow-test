@@ -1,22 +1,26 @@
 services:
-  trino:
-    image: trinodb/trino:latest
-    container_name: trino
-    ports:
-      - "8080:8080"
+  spark:
+    build: ./spark
+    container_name: spark
     volumes:
-      - ./etc:/etc/trino
-    mem_limit: 2g
+      - ./spark-conf/spark-defaults.conf:/spark-conf/spark-defaults.conf:ro
+      - spark_metastore:/opt/spark/work-dir
+    ports:
+      - "10000:10000" # HiveServer2 / Thrift (Metabase connects here)
+      - "4040:4040" # Spark UI (optional)
+    mem_limit: 4g
     env_file:
       - .env
     environment:
-      - JAVA_TOOL_OPTIONS=-Xmx1500m
+      - AWS_ACCESS_KEY_ID=${ICEFLOW_AWS_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${ICEFLOW_AWS_SECRET_KEY}
+      - AWS_REGION=eu-central-1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
+      test: ["CMD-SHELL", "test -f /tmp/spark_ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
   metabase:
     image: metabase/metabase:latest
     container_name: metabase
@@ -32,8 +36,9 @@ services:
       - metabase_data:/metabase-data
     mem_limit: 4g
     depends_on:
-      trino:
+      spark:
         condition: service_healthy
 
 volumes:
   metabase_data:
+  spark_metastore:
