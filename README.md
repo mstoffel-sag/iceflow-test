@@ -6,13 +6,13 @@ Local stack for querying [Cumulocity IceFlow](https://cumulocity.com) Iceberg da
 
 ```
 Metabase (port 3000)
-    └── MySQL driver (port 9030)
+    └── StarRocks driver (port 9030)
             └── StarRocks (FE + BE, allin1)
                     └── External Nessie/Iceberg REST catalog (OAuth2)
                             └── S3 (cumulocity-trial-prod-iceflow-bucket)
 ```
 
-StarRocks mounts an external Iceberg catalog (`nessie`) backed by the Nessie REST API. Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>`) which Metabase cannot browse directly. StarRocks exposes them as views in a local `iceflow` database so Metabase can discover and query them via the standard MySQL driver.
+StarRocks mounts an external Iceberg catalog (`nessie`) backed by the Nessie REST API. Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>`) which Metabase cannot browse directly. StarRocks exposes them as views in a local `iceflow` database so Metabase can discover and query them via the bundled StarRocks driver.
 
 Because StarRocks does not support automatic OAuth2 token refresh, a lightweight `token-refresher` sidecar re-fetches the token periodically and updates the catalog via `ALTER CATALOG`.
 
@@ -139,6 +139,9 @@ LIMIT 100;
 │   ├── Dockerfile                       # starrocks/allin1-ubuntu with curl + mysql-client
 │   ├── entrypoint.sh                    # Fetches OAuth2 token, starts StarRocks, runs setup SQL
 │   └── setup.sql.template               # External catalog + iceflow views DDL
+├── metabase/
+│   ├── Dockerfile                       # Official Metabase image with StarRocks driver bundled
+│   └── starrocks.metabase-driver-*.jar  # StarRocks Metabase driver JAR
 └── token-refresher/
     └── refresh.sh                       # Periodic OAuth2 token refresh via ALTER CATALOG
 ```
