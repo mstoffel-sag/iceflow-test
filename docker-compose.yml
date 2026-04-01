@@ -1,32 +1,30 @@
 services:
-  spark:
-    build: ./spark
-    container_name: spark
-    volumes:
-      - ./spark-conf/spark-defaults.conf:/spark-conf/spark-defaults.conf:ro
-      - spark_metastore:/opt/spark/work-dir
+  starrocks:
+    build: ./starrocks
+    container_name: starrocks
     ports:
-      - "10000:10000" # HiveServer2 / Thrift (Metabase connects here)
-      - "4040:4040" # Spark UI (optional)
-    mem_limit: 4g
+      - "9030:9030" # FE MySQL protocol (Metabase connects here)
+      - "8030:8030" # FE HTTP
+      - "8040:8040" # BE HTTP
+    mem_limit: 6g
     env_file:
       - .env
     environment:
-      - AWS_ACCESS_KEY_ID=${ICEFLOW_AWS_ACCESS_KEY}
-      - AWS_SECRET_ACCESS_KEY=${ICEFLOW_AWS_SECRET_KEY}
-      - AWS_REGION=${ICEFLOW_AWS_REGION}
       - ICEFLOW_NESSIE_URI=${ICEFLOW_NESSIE_URI}
       - ICEFLOW_NESSIE_WAREHOUSE=${ICEFLOW_NESSIE_WAREHOUSE}
       - ICEFLOW_NESSIE_PREFIX=${ICEFLOW_NESSIE_PREFIX}
       - ICEFLOW_NESSIE_SCOPE=${ICEFLOW_NESSIE_SCOPE}
       - ICEFLOW_OAUTH2_SERVER_URI=${ICEFLOW_OAUTH2_SERVER_URI}
+      - ICEFLOW_AWS_ACCESS_KEY=${ICEFLOW_AWS_ACCESS_KEY}
+      - ICEFLOW_AWS_SECRET_KEY=${ICEFLOW_AWS_SECRET_KEY}
+      - ICEFLOW_AWS_REGION=${ICEFLOW_AWS_REGION}
       - ICEFLOW_S3_ENDPOINT=${ICEFLOW_S3_ENDPOINT}
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/spark_ready"]
+      test: ["CMD-SHELL", "test -f /tmp/starrocks_ready"]
       interval: 5s
       timeout: 3s
       retries: 60
-      start_period: 10s
+      start_period: 30s
   metabase:
     image: metabase/metabase:latest
     container_name: metabase
@@ -42,9 +40,8 @@ services:
       - metabase_data:/metabase-data
     mem_limit: 4g
     depends_on:
-      spark:
+      starrocks:
         condition: service_healthy
 
 volumes:
   metabase_data:
-  spark_metastore:

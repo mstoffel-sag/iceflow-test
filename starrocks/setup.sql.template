@@ -1,0 +1,47 @@
+-- ── External catalog pointing at the Nessie Iceberg REST API ─────────────────
+-- StarRocks accesses nested Nessie namespaces as:
+--   catalog.`level1.level2.level3.level4`.table
+CREATE EXTERNAL CATALOG IF NOT EXISTS nessie
+COMMENT "IceFlow Nessie Iceberg catalog (REST)"
+PROPERTIES (
+  "type"                              = "iceberg",
+  "iceberg.catalog.type"              = "rest",
+  "iceberg.catalog.uri"               = "${ICEFLOW_NESSIE_URI}",
+  "iceberg.catalog.warehouse"         = "${ICEFLOW_NESSIE_WAREHOUSE}",
+  "iceberg.catalog.prefix"            = "${ICEFLOW_NESSIE_PREFIX}",
+  "iceberg.catalog.token"             = "${ICEFLOW_OAUTH2_TOKEN}",
+  "aws.s3.access_key"                 = "${ICEFLOW_AWS_ACCESS_KEY}",
+  "aws.s3.secret_key"                 = "${ICEFLOW_AWS_SECRET_KEY}",
+  "aws.s3.region"                     = "${ICEFLOW_AWS_REGION}",
+  "aws.s3.endpoint"                   = "${ICEFLOW_S3_ENDPOINT}",
+  "aws.s3.enable_path_style_access"   = "false"
+);
+
+-- ── Local database for flattened views ────────────────────────────────────────
+-- Metabase browses this database via the MySQL driver.
+-- Views map the 4-level Nessie namespace to simple table names.
+CREATE DATABASE IF NOT EXISTS iceflow;
+
+-- ── Views ─────────────────────────────────────────────────────────────────────
+-- Nessie path: default > t<tenant> > cdc > <type> > <table>
+-- StarRocks multi-level namespace syntax: catalog.`ns1.ns2.ns3.ns4`.table
+CREATE VIEW IF NOT EXISTS iceflow.cdc__measurement__c8y_Temperature AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.measurement`.c8y_Temperature;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__event__event AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.event`.event;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__event__c8y_Position AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.event`.c8y_Position;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__event__jobStatus AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.event`.jobStatus;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__alarm__alarm AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.alarm`.alarm;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__inventory__inventory AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.inventory`.inventory;
+
+CREATE VIEW IF NOT EXISTS iceflow.cdc__inventory__c8y_Position AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.inventory`.c8y_Position;
