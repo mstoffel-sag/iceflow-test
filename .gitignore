@@ -1,3 +1,6 @@
 # Docker env files
 .env
 
+# Metabase plugin jars (binaries)
+metabase/*.jar
+

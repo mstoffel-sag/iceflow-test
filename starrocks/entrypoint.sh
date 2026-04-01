@@ -20,7 +20,7 @@ fi
 echo "Token fetched successfully."
 
 # Start StarRocks (FE + BE via supervisord) in background
-/bin/bash /opt/starrocks/entrypoint.sh &
+/bin/bash /data/deploy/entrypoint.sh &
 SR_PID=$!
 
 # Wait until FE MySQL port is open (up to 120s)

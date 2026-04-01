@@ -1,18 +1,20 @@
 # iceflow-test
 
-Local stack for querying [Cumulocity IceFlow](https://cumulocity.com) Iceberg data via Spark and Metabase.
+Local stack for querying [Cumulocity IceFlow](https://cumulocity.com) Iceberg data via StarRocks and Metabase.
 
 ## Architecture
 
 ```
 Metabase (port 3000)
-    └── SparkSQL connector (HiveThriftServer2, port 10000)
-            └── Spark 3.5.8 + Iceberg 1.10.1
-                    └── Nessie/Iceberg REST catalog (OAuth2)
+    └── MySQL driver (port 9030)
+            └── StarRocks (FE + BE, allin1)
+                    └── External Nessie/Iceberg REST catalog (OAuth2)
                             └── S3 (cumulocity-trial-prod-iceflow-bucket)
 ```
 
-Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>`) which Metabase cannot browse directly. Spark exposes them as Hive views in the `default` schema so Metabase can discover and query them.
+StarRocks mounts an external Iceberg catalog (`nessie`) backed by the Nessie REST API. Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>`) which Metabase cannot browse directly. StarRocks exposes them as views in a local `iceflow` database so Metabase can discover and query them via the standard MySQL driver.
+
+Because StarRocks does not support automatic OAuth2 token refresh, a lightweight `token-refresher` sidecar re-fetches the token periodically and updates the catalog via `ALTER CATALOG`.
 
 ## Prerequisites
 
@@ -54,98 +56,96 @@ Nessie tables have a 4-level deep namespace (`default > t<tenant> > cdc > <type>
    docker compose up -d
    ```
 
-   Spark fetches an OAuth2 token, starts HiveThriftServer2, creates the Hive views, and signals healthy. Metabase starts only after Spark is healthy and immediately syncs the views.
+   StarRocks fetches an OAuth2 token on startup, creates the external catalog and `iceflow` views, then signals healthy. Metabase and the token-refresher sidecar start only after StarRocks is healthy.
 
 4. Open Metabase at http://localhost:3000
 
 ## Metabase connection settings
 
-The SparkSQL database is configured as:
+Metabase uses a custom StarRocks driver (bundled in the `metabase/` image). Add a new database with:
 
-| Setting  | Value     |
-| -------- | --------- |
-| Engine   | SparkSQL  |
-| Host     | `spark`   |
-| Port     | `10000`   |
-| Database | `default` |
-| Username | `spark`   |
+| Setting  | Value              |
+| -------- | ------------------ |
+| Engine   | StarRocks          |
+| Host     | `starrocks`        |
+| Port     | `9030`             |
+| Catalog  | `default_catalog`  |
+| Database | `iceflow`          |
+| Username | `root`             |
 
 ## Available views
 
-Views are defined in `spark/create_views.sql` and created in the Hive `default` schema on startup:
+Views are defined in `starrocks/setup.sql.template` and created in the `iceflow` database on startup:
 
-| View name                           | Nessie source table                                          |
-| ----------------------------------- | ------------------------------------------------------------ |
-| `cdc__measurement__c8y_temperature` | `nessie.default.t2027824580.cdc.measurement.c8y_Temperature` |
-| `cdc__event__event`                 | `nessie.default.t2027824580.cdc.event.event`                 |
-| `cdc__event__c8y_position`          | `nessie.default.t2027824580.cdc.event.c8y_Position`          |
-| `cdc__event__jobstatus`             | `nessie.default.t2027824580.cdc.event.jobStatus`             |
-| `cdc__alarm__alarm`                 | `nessie.default.t2027824580.cdc.alarm.alarm`                 |
-| `cdc__inventory__inventory`         | `nessie.default.t2027824580.cdc.inventory.inventory`         |
-| `cdc__inventory__c8y_position`      | `nessie.default.t2027824580.cdc.inventory.c8y_Position`      |
+| View name                              | Nessie source table                                                  |
+| -------------------------------------- | -------------------------------------------------------------------- |
+| `cdc__measurement__c8y_Temperature`    | `nessie.default.t2027824580.cdc.measurement.c8y_Temperature`        |
+| `cdc__event__event`                    | `nessie.default.t2027824580.cdc.event.event`                        |
+| `cdc__event__c8y_Position`             | `nessie.default.t2027824580.cdc.event.c8y_Position`                 |
+| `cdc__event__jobStatus`                | `nessie.default.t2027824580.cdc.event.jobStatus`                    |
+| `cdc__alarm__alarm`                    | `nessie.default.t2027824580.cdc.alarm.alarm`                        |
+| `cdc__inventory__inventory`            | `nessie.default.t2027824580.cdc.inventory.inventory`                |
+| `cdc__inventory__c8y_Position`         | `nessie.default.t2027824580.cdc.inventory.c8y_Position`             |
 
 ## Adding or editing views
 
-Edit `spark/create_views.sql` and add or modify `CREATE OR REPLACE VIEW` statements:
+Edit `starrocks/setup.sql.template` and add or modify `CREATE VIEW` statements:
 
 ```sql
-CREATE OR REPLACE VIEW default.my_view AS
-SELECT * FROM nessie.`default`.`t2027824580`.`cdc`.`<type>`.`<table>`;
+CREATE VIEW IF NOT EXISTS iceflow.my_view AS
+  SELECT * FROM nessie.`default.t2027824580.cdc.<type>`.<table>;
 ```
 
-Then restart Spark to recreate all views:
+Then rebuild and restart StarRocks to recreate all views:
 
 ```bash
-docker compose restart spark
+docker compose build starrocks && docker compose restart starrocks
 ```
 
 To verify views after restart:
 
 ```bash
-docker exec spark /opt/spark/bin/beeline -u "jdbc:hive2://localhost:10000" -n spark \
-  -e "SHOW TABLES IN default;"
+docker exec starrocks mysql -h 127.0.0.1 -P 9030 -u root -e "SHOW TABLES IN iceflow;"
 ```
 
-Trigger a Metabase schema resync after adding views: Admin → Databases → Spark → Sync database schema now.
+Trigger a Metabase schema resync after adding views: Admin → Databases → iceflow → Sync database schema now.
+
+## Token refresh
+
+The `token-refresher` sidecar runs on a configurable interval (default: 3300s / 55 min) and keeps the catalog token fresh by issuing `ALTER CATALOG nessie SET (...)` against StarRocks. Set `TOKEN_REFRESH_INTERVAL` in `.env` to match your token TTL.
 
 ## Querying data
 
 Use Metabase's visual query builder or SQL editor. Example:
 
 ```sql
-SELECT T.value, T.unit, time, source
-FROM default.cdc__measurement__c8y_temperature
+SELECT *
+FROM iceflow.cdc__measurement__c8y_Temperature
 ORDER BY time DESC
-LIMIT 100
+LIMIT 100;
 ```
 
-Note: `T` is a struct column — access fields with `T.value` and `T.unit`.
-
 > **Note:** The inventory table is a CDC log, not a deduplicated dimension table. Each device update creates a new row. Use a `ROW_NUMBER()` window function to get the latest state per device if joining to measurements.
-
-## Spark UI
-
-Available at http://localhost:4040 while Spark is running.
 
 ## File structure
 
 ```
 .
-├── docker-compose.yml              # Spark + Metabase services
-├── .env                            # Credentials (gitignored)
-├── .env.example                    # Credentials template
-├── check_table.py                  # Inspect Iceberg tables via the REST API directly
-├── spark-conf/
-│   └── spark-defaults.conf         # Iceberg/Nessie catalog config template
-└── spark/
-    ├── Dockerfile                  # Spark 3.5.8 image with Iceberg + S3 JARs
-    ├── entrypoint.sh               # Fetches OAuth2 token, starts Thrift Server, creates views
-    └── create_views.sql            # Hive view definitions (edit to add/change views)
+├── docker-compose.yml                   # StarRocks + Metabase + token-refresher services
+├── .env                                 # Credentials (gitignored)
+├── .env.example                         # Credentials template
+├── check_table.py                       # Inspect Iceberg tables via the REST API directly
+├── starrocks/
+│   ├── Dockerfile                       # starrocks/allin1-ubuntu with curl + mysql-client
+│   ├── entrypoint.sh                    # Fetches OAuth2 token, starts StarRocks, runs setup SQL
+│   └── setup.sql.template               # External catalog + iceflow views DDL
+└── token-refresher/
+    └── refresh.sh                       # Periodic OAuth2 token refresh via ALTER CATALOG
 ```
 
 ## Inspecting the catalog directly
 
-`check_table.py` queries the Iceberg REST API directly (bypassing Spark) to inspect table metadata. Useful for verifying table names, snapshot counts, and metadata locations before configuring views.
+`check_table.py` queries the Iceberg REST API directly (bypassing StarRocks) to inspect table metadata. Useful for verifying table names, snapshot counts, and metadata locations before configuring views.
 
 ```bash
 ICEFLOW_CLIENT_ID=... ICEFLOW_CLIENT_SECRET=... python check_table.py
@@ -155,20 +155,29 @@ It lists all tables under the `measurement`, `inventory`, and `event` namespaces
 
 ## Troubleshooting
 
-**Spark exits with OOM / SIGSEGV**
-Increase `mem_limit` for the spark service in `docker-compose.yml` (currently `4g`).
+**StarRocks exits with OOM**
+Increase `mem_limit` for the starrocks service in `docker-compose.yml` (currently `6g`).
 
 **Metabase exits with code 137 (OOM)**
 Increase `mem_limit` for the metabase service (currently `4g`) and `-Xmx` in `JAVA_TOOL_OPTIONS`.
 
 **Views not appearing in Metabase**
-Check view creation log inside the container:
+Check setup SQL output in the container logs:
 
 ```bash
-docker exec spark cat /tmp/create_views.log
+docker logs starrocks
 ```
 
-Then trigger a manual resync in Metabase: Admin → Databases → Spark → Sync database schema now.
+Or inspect the setup log directly:
+
+```bash
+docker exec starrocks cat /tmp/setup.log
+```
+
+Then trigger a manual resync in Metabase: Admin → Databases → iceflow → Sync database schema now.
 
 **OAuth2 token fetch fails on startup**
-Spark will exit immediately. Check `docker logs spark` for the error. Verify `ICEFLOW_CLIENT_ID` and `ICEFLOW_CLIENT_SECRET` in `.env`.
+StarRocks will exit immediately. Check `docker logs starrocks` and verify `ICEFLOW_CLIENT_ID` and `ICEFLOW_CLIENT_SECRET` in `.env`.
+
+**Catalog token expired mid-session**
+The token-refresher handles this automatically. If it falls behind, check `docker logs token-refresher`.

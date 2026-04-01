@@ -44,7 +44,7 @@ services:
         condition: service_healthy
 
   metabase:
-    image: metabase/metabase:latest
+    build: ./metabase
     container_name: metabase
     ports:
       - "3000:3000"
