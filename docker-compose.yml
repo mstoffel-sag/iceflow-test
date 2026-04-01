@@ -25,6 +25,24 @@ services:
       timeout: 3s
       retries: 60
       start_period: 30s
+  token-refresher:
+    image: alpine:latest
+    container_name: token-refresher
+    command: >
+      sh -c "apk add --no-cache curl mysql-client && sh /refresh.sh"
+    volumes:
+      - ./token-refresher/refresh.sh:/refresh.sh:ro
+    env_file:
+      - .env
+    environment:
+      - TOKEN_REFRESH_INTERVAL=${TOKEN_REFRESH_INTERVAL:-3300}
+      - ICEFLOW_OAUTH2_SERVER_URI=${ICEFLOW_OAUTH2_SERVER_URI}
+      - ICEFLOW_NESSIE_SCOPE=${ICEFLOW_NESSIE_SCOPE}
+    mem_limit: 64m
+    depends_on:
+      starrocks:
+        condition: service_healthy
+
   metabase:
     image: metabase/metabase:latest
     container_name: metabase
