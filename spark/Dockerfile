@@ -15,7 +15,7 @@ RUN MAVEN="https://repo1.maven.org/maven2" && \
 
 # Entrypoint: substitute env vars into spark-defaults.conf, then run Thrift Server as PID 1
 COPY entrypoint.sh /opt/spark/entrypoint.sh
-COPY create_views.sql /opt/spark/create_views.sql
+COPY generate_views.py /opt/spark/generate_views.py
 RUN chmod +x /opt/spark/entrypoint.sh
 
 USER spark

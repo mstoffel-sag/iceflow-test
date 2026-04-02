@@ -56,10 +56,14 @@ for i in $(seq 1 120); do
   sleep 1
 done
 
+# Regenerate views from live Iceberg catalog
+echo "Generating Hive views from Iceberg catalog..."
+python3 /opt/spark/generate_views.py /tmp/create_views.sql
+
 # Create (or recreate) Hive views so Metabase can browse the Nessie tables
 echo "Creating Hive views..."
 "$SPARK_HOME/bin/beeline" -u "jdbc:hive2://localhost:10000" -n spark \
-  -f /opt/spark/create_views.sql \
+  -f /tmp/create_views.sql \
   >/tmp/create_views.log 2>&1 \
   && echo "Views created successfully" >> /tmp/create_views.log \
   || echo "View creation failed" >> /tmp/create_views.log
@@ -68,6 +72,17 @@ cat /tmp/create_views.log
 # Signal that Spark + views are ready (Docker healthcheck watches this file)
 touch /tmp/spark_ready
 echo "Spark is ready."
+
+# Periodically refresh views to pick up new Iceberg tables (every 5 minutes)
+(while true; do
+  sleep 300
+  echo "Refreshing Hive views from Iceberg catalog..."
+  python3 /opt/spark/generate_views.py /tmp/create_views.sql \
+    && "$SPARK_HOME/bin/beeline" -u "jdbc:hive2://localhost:10000" -n spark \
+         -f /tmp/create_views.sql >/tmp/create_views.log 2>&1 \
+    && echo "Views refreshed successfully." \
+    || echo "View refresh failed, will retry next cycle."
+done) &
 
 # Keep PID 1 alive by waiting for Spark
 wait $SPARK_PID
