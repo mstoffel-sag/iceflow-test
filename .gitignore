@@ -1,3 +1,5 @@
 # Docker env files
 .env
+.claude
+.vscode
 
